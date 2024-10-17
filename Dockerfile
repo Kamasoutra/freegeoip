@@ -1,25 +1,33 @@
-FROM golang:1.9
+FROM golang:1.20-alpine AS builder
 
-COPY cmd/freegeoip/public /var/www
+ARG TARGETARCH
 
-ADD . /go/src/github.com/Kamasoutra/freegeoip
-RUN \
-	cd /go/src/github.com/Kamasoutra/freegeoip/cmd/freegeoip && \
-	go get -d && go install && \
-	apt-get update && apt-get install -y libcap2-bin && \
-	setcap cap_net_bind_service=+ep /go/bin/freegeoip && \
-	apt-get clean && rm -rf /var/lib/apt/lists/* && \
-	useradd -ms /bin/bash freegeoip
+WORKDIR /app
 
-USER freegeoip
-ENTRYPOINT ["/go/bin/freegeoip"]
+RUN apk update && apk add --no-cache git
+
+RUN git clone https://github.com/Kamasoutra/freegeoip.git .
+
+RUN go mod init freegeoip
+
+RUN go mod tidy
+
+RUN go mod vendor
+
+RUN GOARCH=$TARGETARCH go build -mod=vendor -o freegeoip ./cmd/freegeoip
+
+FROM alpine:3.18
+
+WORKDIR /opt/freegeoip
+
+RUN apk add --no-cache curl
+
+RUN mkdir -p /opt/freegeoip/data
+
+RUN curl -L -o /opt/freegeoip/data/GeoLite2-City.mmdb.gz https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz
+
+COPY --from=builder /app/freegeoip /opt/freegeoip/
 
 EXPOSE 8080
 
-# CMD instructions:
-# Add  "-use-x-forwarded-for"      if your server is behind a reverse proxy
-# Add  "-public", "/var/www"       to enable the web front-end
-# Add  "-internal-server", "8888"  to enable the pprof+metrics server
-#
-# Example:
-# CMD ["-use-x-forwarded-for", "-public", "/var/www", "-internal-server", "8888"]
+ENTRYPOINT ["./freegeoip"]
